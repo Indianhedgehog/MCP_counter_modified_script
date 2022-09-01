@@ -1,0 +1,345 @@
+---
+title: "MCP_counter analysis with default parameters"
+author: "Rajesh Pal"
+date: '2022-08-31'
+output: html_document
+---
+
+```{r echo=FALSE, message=FALSE}
+library(dplyr)
+library(MCPcounter)
+library(readr)
+library(ComplexHeatmap)
+library(circlize)
+library(dendextend)
+library(reshape2)
+library(ggplot2)
+library(ggsignif)
+library(viridis)
+library(hrbrthemes)
+#library(ggpubr)
+
+```
+<br>
+**The following script has been adapted from webMCP-counter R shiny app. The app currently has the following drawbacks: frequent crashes when you upload large files, and you cannot download high quality images following analysis. **
+
+**The whole script has been written in easy to understand language. I know some of the things could have been written in a loop, or it could have been modified here and there, however i am lazy, so, feel free to do whatever you like! **  
+
+
+**For the analysis please use normalized data. Following analysis assumes that you have normalized counts matrix from DESEQ's (estimatesizefactors) output. Please do not use TPM, for GOD's sake!! **
+
+<br>
+
+**Provide the input directory of normalized matrix.** This code block reads the tibble data frame, converts it into dataframe and sets the first column in to row names.
+
+```{r message = FALSE}
+
+setwd("/omics/odcf/analysis/hipo/hipo_021/RP_all_RNAseq/rnaseq/") 
+
+normalized_matrix = read_csv("positive_matrix.csv") 
+normalized_matrix = as.data.frame(normalized_matrix)
+rownames(normalized_matrix) <- normalized_matrix[, 1]
+normalized_matrix <- normalized_matrix[,-1] 
+
+```
+
+
+**Initiating MCP counter.**
+This code block transposes the dataframe, scale it, followed by clustering.
+
+```{r}
+
+clusterColorCode <- c("#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#ffff33","#a65628","#f781bf","#999999","#8dd3c7")
+names(clusterColorCode) <- paste("Cluster",1:10)
+
+estimates <- t(data.frame(MCPcounter.estimate(normalized_matrix,featuresType = "HUGO_symbols"),check.names = FALSE))
+
+est.norm <- t(apply(t(estimates),1,scale))
+colnames(est.norm) <- row.names(estimates)
+
+est.norm[is.na(est.norm[,1]),] <- 0
+
+dend.mcp <- hclust(dist(est.norm,method = "euclidian"))
+dend.samples <- hclust(dist(t(est.norm),method = "euclidian"))
+
+
+```
+<br>
+
+**Just modify the num_of_clusters value to visualize more clusters on the heatmap or overall analysis. **
+
+```{r}
+##############
+num_of_clusters = 3
+
+
+#############
+dend.samples <- color_branches(dend.samples,k=num_of_clusters,col = clusterColorCode[1:num_of_clusters])
+
+```
+
+
+**Heatmap**
+
+```{r}
+###adjust col-size here
+size = 5
+
+##############################
+Heatmap(as.matrix(est.norm), col = colorRamp2(c(-4,-2, 0, 2,4),c("#2166ac","#92c5de","#f7f7f7","#f4a582","#b2182b")),
+        cluster_rows = dend.mcp, cluster_columns = dend.samples, show_column_names = TRUE, show_row_names = TRUE, name = "Row Z-score", column_names_gp = grid::gpar(fontsize = size))
+
+```
+
+<br>
+
+**Extracting the clusters for for making boxplots/violin plots and significance analysis between the clusters.**
+
+```{r}
+
+clusters <- paste("Cluster",match(get_leaves_attr(dend.samples,"edgePar"),clusterColorCode))
+clusters_n <- paste(clusters,"\n(n=",table(clusters)[clusters],")",sep="")
+names(clusters_n) <- labels(dend.samples)
+clusters_n <- clusters_n[rownames(estimates)]
+
+
+melt_df <- function(df,var_to_group){
+  df.m <- melt(df,id = var_to_group,varnames = c("variable","value"))
+  colnames(df.m)[1] <- "groups"
+  df.m$value <- as.numeric(as.character(df.m$value))
+  return(df.m)
+}
+
+# get boxplots 
+estimates_df <- data.frame(estimates,check.names = F)
+estimates_df$clusters <- clusters_n
+melted_est <- melt_df(estimates_df,var_to_group = 'clusters')
+
+```
+
+
+**Initiating violin plots with significance test between all the groups. At present it performs t-test, Need to modify the code if you want to perform any other test.
+BTW, the worst code block begins!!
+Please don't judge me, and i wont judge you!**
+
+```{r}
+
+melted_est%>%
+  filter(variable == "NK cells") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("NK-cells") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+```
+
+
+```{r, echo=FALSE, message=FALSE}
+
+melted_est%>%
+  filter(variable == "T cells") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("T-cells") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+melted_est%>%
+  filter(variable == "CD8 T cells") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("CD8 T cells") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+melted_est%>%
+  filter(variable == "Cytotoxic lymphocytes") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("Cytotoxic lymphocytes") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+melted_est%>%
+  filter(variable == "B lineage") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("B lineage") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+melted_est%>%
+  filter(variable == "Monocytic lineage") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("Monocytic lineage") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+
+melted_est%>%
+  filter(variable == "Myeloid dendritic cells") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("Myeloid dendritic cells") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+melted_est%>%
+  filter(variable == "Neutrophils") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("Neutrophils") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+melted_est%>%
+  filter(variable == "Endothelial cells") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("Endothelial cells") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+
+melted_est%>%
+  filter(variable == "Fibroblasts") %>%
+  select(groups,value) %>%
+  #left_join(sample_size) %>%
+  mutate(myaxis = groups) %>%
+  {ggplot(.,aes(myaxis, value, fill= groups)) + 
+      geom_violin(width=1.4) +    #    ggbeeswarm::geom_beeswarm()+
+      geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+      scale_fill_viridis(discrete = TRUE) +
+      theme_ipsum() +
+      theme(
+        legend.position="none",
+        plot.title = element_text(size=11)
+      ) +
+      ggtitle("Fibroblasts") +
+      xlab("") + ylab("MCP score") +
+      ggsignif::geom_signif(comparisons =  combn(sort(unique(.$groups)),2,  simplify = F),
+                            step_increase = 0.1,test='t.test')}
+
+
+```
+
+
+In case you wanted simple box plots, here it is! Not that fancy right? 
+
+```{r}
+
+boxplot(estimates[,"T cells"]~clusters_n,xlab = "", ylab = "T cells", border = clusterColorCode,outline=FALSE, las=2)
+stripchart(estimates[,"T cells"]~clusters_n,vertical = TRUE, add=TRUE, method = "jitter",pch=16, col = clusterColorCode)
+
+
+```
+
